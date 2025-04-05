@@ -49,19 +49,42 @@ async def transcribe_audio(file: UploadFile = File(...)):
                 response_format="text"
             )
         
+        print(transcript)
         # Process the transcript to extract grocery items
         # This is a simplified version. In a real app, you'd use more sophisticated NLP
         system_prompt = """
         Extract grocery items from the provided text. The text may contain items in Tamil and English.
         For each item, provide:
-        1. The Tamil name (transliterate if only English name is given)
+        1. The Tamil name in Tamil script (தமிழ் எழுத்து) - NOT transliterated
         2. The English name (translate if only Tamil name is given)
         3. The quantity mentioned
+
+        IMPORTANT NOTES ON TAMIL QUANTITIES:
+        - "கால் கிலோ" (kaal kilo) means 250 grams, NOT 0.25 kilograms
+        - "அரை கிலோ" (arai kilo) means 500 grams, NOT half kilogram
+        - "முக்கால் கிலோ" (mukkaal kilo) means 750 grams, NOT 0.75 kilograms
+        - If someone says "அரை கிலோ ரெண்டு" (arai kilo rendu), it means "2 quantities of half kilo" (2 × 500g), NOT 2.5 kilograms
+        - Always preserve the original quantity format mentioned in the audio
+        
+        CRITICAL INSTRUCTIONS FOR TAMIL SPELLING:
+        - Maintain Tamil words in proper Tamil script (UTF-8) characters
+        - Do NOT transliterate Tamil words to English/Roman script
+        - Ensure correct Tamil spelling with proper vowel and consonant marks
+        - Common Tamil grocery items should appear in Tamil script, for example:
+          * "அரிசி" (rice)
+          * "வெங்காயம்" (onion)
+          * "தக்காளி" (tomato)
+          * "மிளகாய்" (chili)
+          * "பட்டாணி" (peas)
+          * "கீரை" (greens)
+        - If the audio contains Tamil words in Tamil script, preserve them as-is
+        - If the audio contains transliterated Tamil words, convert them to proper Tamil script
         
         Return a JSON array with objects having the keys 'tamil_name', 'english_name', and 'quantity'.
+        The response should be in this format: {"items": [{"tamil_name": "", "english_name": "", "quantity": ""}]}
         """
         
-        user_prompt = f"Here's the transcript: {transcript}\n\nPlease extract the grocery items with their quantities."
+        user_prompt = f"Here's the transcript: {transcript}\n\nPlease extract the grocery items with their quantities following the guidelines for Tamil quantity terms."
         
         response = client.chat.completions.create(
             model="gpt-4o",
