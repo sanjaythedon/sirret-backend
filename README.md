@@ -6,7 +6,7 @@ This is the backend API for the Tamil/English Grocery List Speech-to-Text applic
 
 - Audio transcription using OpenAI's Whisper model
 - Extraction of grocery items with Tamil and English names
-- Quantity recognition for each grocery item
+- Weight and quantity recognition for each grocery item
 - CORS-enabled API for frontend integration
 
 ## Setup
@@ -52,12 +52,14 @@ The API returns a JSON array of grocery items with the following structure:
   {
     "tamil_name": "அரிசி",
     "english_name": "Rice",
-    "quantity": "2kg"
+    "weight": "2 kg",
+    "quantity": null
   },
   {
     "tamil_name": "பால்",
     "english_name": "Milk",
-    "quantity": "1 liter"
+    "weight": "1 litre",
+    "quantity": 2
   }
 ]
 ``` 

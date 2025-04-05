@@ -26,7 +26,8 @@ openai.api_key = OPENAI_API_KEY
 class GroceryItem(BaseModel):
     tamil_name: str
     english_name: str
-    quantity: str
+    weight: str  # For weights like "500 grams", "1 kg", "1 litre", etc.
+    quantity: Optional[int] = None  # Numerical quantity if specified
 
 @app.get("/")
 def read_root():
@@ -57,14 +58,16 @@ async def transcribe_audio(file: UploadFile = File(...)):
         For each item, provide:
         1. The Tamil name in Tamil script (தமிழ் எழுத்து) - NOT transliterated
         2. The English name (translate if only Tamil name is given)
-        3. The quantity mentioned
+        3. The weight in English (e.g., "500 grams", "1 kg", "1 litre", "1 ml", etc.)
+        4. The quantity as a number (if specifically mentioned)
 
         IMPORTANT NOTES ON TAMIL QUANTITIES:
-        - "கால் கிலோ" (kaal kilo) means 250 grams, NOT 0.25 kilograms
-        - "அரை கிலோ" (arai kilo) means 500 grams, NOT half kilogram
-        - "முக்கால் கிலோ" (mukkaal kilo) means 750 grams, NOT 0.75 kilograms
-        - If someone says "அரை கிலோ ரெண்டு" (arai kilo rendu), it means "2 quantities of half kilo" (2 × 500g), NOT 2.5 kilograms
-        - Always preserve the original quantity format mentioned in the audio
+        - "கால் கிலோ" (kaal kilo) means "250 grams", NOT 0.25 kilograms
+        - "அரை கிலோ" (arai kilo) means "500 grams", NOT half kilogram
+        - "முக்கால் கிலோ" (mukkaal kilo) means "750 grams", NOT 0.75 kilograms
+        - If someone says "அரை கிலோ ரெண்டு" (arai kilo rendu), it means quantity = 2, weight = "500 grams"
+        - Always express weights in English (grams, kg, litre, ml, etc.)
+        - If only a quantity is mentioned (like "2 apples"), set weight to an empty string and quantity to the number
         
         CRITICAL INSTRUCTIONS FOR TAMIL SPELLING:
         - Maintain Tamil words in proper Tamil script (UTF-8) characters
@@ -80,8 +83,9 @@ async def transcribe_audio(file: UploadFile = File(...)):
         - If the audio contains Tamil words in Tamil script, preserve them as-is
         - If the audio contains transliterated Tamil words, convert them to proper Tamil script
         
-        Return a JSON array with objects having the keys 'tamil_name', 'english_name', and 'quantity'.
-        The response should be in this format: {"items": [{"tamil_name": "", "english_name": "", "quantity": ""}]}
+        Return a JSON array with objects having the keys 'tamil_name', 'english_name', 'weight', and 'quantity'.
+        The response should be in this format: {"items": [{"tamil_name": "", "english_name": "", "weight": "", "quantity": null}]}
+        If no quantity is specified, set it to null.
         """
         
         user_prompt = f"Here's the transcript: {transcript}\n\nPlease extract the grocery items with their quantities following the guidelines for Tamil quantity terms."
