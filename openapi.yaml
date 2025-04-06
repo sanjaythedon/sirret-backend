@@ -6,7 +6,7 @@ info:
 servers:
   - url: http://localhost:8000
     description: Development server
-  - url: https://api.yourdomain.com
+  - url: https://r7c600hwfa.execute-api.ap-south-1.amazonaws.com
     description: Production server
 paths:
   /:
