@@ -1,0 +1,34 @@
+name: Deploy API to AWS API Gateway
+
+on:
+  push:
+    branches:
+      - main  # Adjust if your default branch is named differently
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v3
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Update API Gateway with OpenAPI definition
+        run: |
+          aws apigateway put-rest-api \
+            --rest-api-id ${{ secrets.API_GATEWAY_ID }} \
+            --body file://openapi.yaml \
+            --mode overwrite
+
+      - name: Deploy API Gateway
+        run: |
+          aws apigateway create-deployment \
+            --rest-api-id ${{ secrets.API_GATEWAY_ID }} \
+            --stage-name prod  # Adjust the stage name as needed
