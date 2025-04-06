@@ -1,0 +1,78 @@
+openapi: 3.0.3
+info:
+  title: Grocery List Speech-to-Text API
+  description: API for transcribing audio recordings of grocery lists and extracting structured data with Tamil language support
+  version: 1.0.0
+servers:
+  - url: http://localhost:8000
+    description: Development server
+paths:
+  /:
+    get:
+      summary: Root endpoint
+      description: Returns a welcome message
+      operationId: readRoot
+      responses:
+        '200':
+          description: Successful operation
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: "Grocery List Speech-to-Text API"
+  /transcribe/:
+    post:
+      summary: Transcribe audio to grocery list
+      description: Converts an audio file containing a grocery list (potentially in Tamil) to structured data
+      operationId: transcribeAudio
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: Audio file to transcribe
+              required:
+                - file
+      responses:
+        '200':
+          description: Successful operation
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/GroceryItem'
+components:
+  schemas:
+    GroceryItem:
+      type: object
+      properties:
+        tamil_name:
+          type: string
+          description: Name of the grocery item in Tamil script
+          example: "அரிசி"
+        english_name:
+          type: string
+          description: Name of the grocery item in English
+          example: "Rice"
+        weight:
+          type: string
+          description: Weight of the item (e.g., "500 grams", "1 kg")
+          example: "1 kg"
+        quantity:
+          type: integer
+          nullable: true
+          description: Numerical quantity if specified
+          example: 2
+      required:
+        - tamil_name
+        - english_name
+        - weight 
