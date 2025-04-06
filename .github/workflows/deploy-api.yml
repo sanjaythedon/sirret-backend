@@ -24,7 +24,7 @@ jobs:
         run: |
           aws apigateway put-rest-api \
             --rest-api-id ${{ secrets.API_GATEWAY_ID }} \
-            --body file://openapi.yaml \
+            --body "fileb://openapi.yaml" \
             --mode overwrite
 
       - name: Deploy API Gateway
