@@ -1,5 +1,6 @@
-from fastapi import FastAPI, UploadFile, File
+from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 import openai
 import os
@@ -9,13 +10,14 @@ from dotenv import load_dotenv
 load_dotenv()
 app = FastAPI()
 
-# Add CORS middleware to allow requests from the frontend
+# Configure CORS more comprehensively for direct API Gateway integration
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "*"],
-    # allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=["*"],  # Allow all origins
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],  # Allow all methods
+    allow_headers=["*"],  # Allow all headers
+    expose_headers=["*"],  # Expose all headers
 )
 
 # Set your OpenAI API key
@@ -32,6 +34,18 @@ class GroceryItem(BaseModel):
 @app.get("/")
 def read_root():
     return {"message": "Grocery List Speech-to-Text API"}
+
+# Add OPTIONS endpoint to handle preflight requests
+@app.options("/{full_path:path}")
+async def options_route(full_path: str):
+    return JSONResponse(
+        content={"message": "OK"},
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Requested-With",
+        },
+    )
 
 @app.post("/transcribe/", response_model=List[GroceryItem])
 async def transcribe_audio(file: UploadFile = File(...)):
@@ -106,6 +120,8 @@ async def transcribe_audio(file: UploadFile = File(...)):
         
         return grocery_items
         
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error processing audio: {str(e)}")
     finally:
         # Clean up the temporary file
         if os.path.exists(temp_file_path):
