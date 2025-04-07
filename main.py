@@ -7,8 +7,9 @@ import os
 from typing import List, Optional
 from dotenv import load_dotenv
 
+# Load environment variables from .env file if it exists
 load_dotenv()
-app = FastAPI()
+app = FastAPI(root_path="/prod")  # This is important for API Gateway stage name
 
 # Configure CORS more comprehensively for direct API Gateway integration
 app.add_middleware(
@@ -50,7 +51,7 @@ async def options_route(full_path: str):
 @app.post("/transcribe/", response_model=List[GroceryItem])
 async def transcribe_audio(file: UploadFile = File(...)):
     # Save the uploaded file temporarily
-    temp_file_path = f"temp_{file.filename}"
+    temp_file_path = f"/tmp/temp_{file.filename}"  # Use /tmp for Lambda
     with open(temp_file_path, "wb") as buffer:
         buffer.write(await file.read())
     
@@ -127,6 +128,7 @@ async def transcribe_audio(file: UploadFile = File(...)):
         if os.path.exists(temp_file_path):
             os.remove(temp_file_path)
 
+# This section will be used when running locally, not in Lambda
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000) 
