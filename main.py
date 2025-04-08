@@ -106,84 +106,97 @@ If no quantity is specified, set it to null.
 
 async def process_audio(audio_data, websocket: WebSocket):
     # Create a temporary file to store the audio chunk
-    with tempfile.NamedTemporaryFile(delete=False, suffix='.webm') as temp_file:
-        temp_file_path = temp_file.name
-        temp_file.write(audio_data)
-    
+    temp_file_path = None
     try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.webm') as temp_file:
+            temp_file_path = temp_file.name
+            temp_file.write(audio_data)
+        
+        print(f"Processing audio chunk of size {len(audio_data)} bytes")
+        
         # Use OpenAI Whisper to transcribe the audio
         with open(temp_file_path, "rb") as audio_file:
             client = openai.OpenAI(api_key=OPENAI_API_KEY)
             
             # Use a faster whisper model for real-time processing
-            transcript = client.audio.transcriptions.create(
-                model="whisper-1",
-                file=audio_file,
-                response_format="text"
-            )
+            try:
+                transcript = client.audio.transcriptions.create(
+                    model="whisper-1",
+                    file=audio_file,
+                    response_format="text"
+                )
+                print(f"Transcribed: {transcript}")
+            except Exception as e:
+                error_message = str(e)
+                print(f"Transcription error: {error_message}")
+                await manager.send_json(websocket, {"error": f"Error from server: {error_message}"})
+                return
         
         if not transcript.strip():
+            print("Empty transcript, skipping")
             return
-            
-        print(f"Transcribed: {transcript}")
         
         # For real-time processing, use a more focused prompt for faster inference
         user_prompt = f"Here's the transcript: {transcript}\n\nExtract grocery items with quantities in Tamil or English."
         
-        response = client.chat.completions.create(
-            model="gpt-4o",
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": user_prompt}
-            ],
-            response_format={"type": "json_object"},
-            temperature=0.3  # Lower temperature for more consistent, faster responses
-        )
-        
-        # Parse the JSON response
-        result = response.choices[0].message.content
-        grocery_items = json.loads(result).get("items", [])
-        
-        # Send each item individually to the frontend
-        for item in grocery_items:
-            await manager.send_json(websocket, item)
-        
+        try:
+            response = client.chat.completions.create(
+                model="gpt-4o",
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": user_prompt}
+                ],
+                response_format={"type": "json_object"},
+                temperature=0.3  # Lower temperature for more consistent, faster responses
+            )
+            
+            # Parse the JSON response
+            result = response.choices[0].message.content
+            grocery_items = json.loads(result).get("items", [])
+            
+            if not grocery_items:
+                print("No grocery items found in transcript")
+                return
+                
+            print(f"Found {len(grocery_items)} grocery items")
+            
+            # Send each item individually to the frontend
+            for item in grocery_items:
+                await manager.send_json(websocket, item)
+                
+        except Exception as e:
+            error_message = str(e)
+            print(f"GPT processing error: {error_message}")
+            await manager.send_json(websocket, {"error": f"Error processing text: {error_message}"})
+            
     except Exception as e:
-        print(f"Error processing audio: {str(e)}")
-        await manager.send_json(websocket, {"error": str(e)})
+        error_message = str(e)
+        print(f"Error processing audio: {error_message}")
+        await manager.send_json(websocket, {"error": f"Error from server: {error_message}"})
     finally:
         # Clean up the temporary file
-        if os.path.exists(temp_file_path):
+        if temp_file_path and os.path.exists(temp_file_path):
             os.remove(temp_file_path)
 
 @app.websocket("/ws/stream-audio/")
 async def websocket_endpoint(websocket: WebSocket):
     await manager.connect(websocket)
-    buffer = bytearray()
     
     try:
         while True:
             # Receive binary data from the WebSocket
             data = await websocket.receive_bytes()
             
-            # If data has a special marker to indicate end of stream
+            # Check for end-of-stream marker
             if len(data) == 1 and data[0] == 255:
-                # Process any remaining data in buffer
-                if buffer:
-                    await process_audio(buffer, websocket)
-                    buffer = bytearray()
                 # Send completion message
                 await manager.send_json(websocket, {"status": "completed"})
                 continue
-                
-            # Accumulate data in buffer
-            buffer.extend(data)
             
-            # Process smaller chunks more frequently (50KB instead of 200KB)
-            # This provides more responsive feedback during recording
-            if len(buffer) > 50000:  # ~50KB chunks
-                await process_audio(buffer, websocket)
-                buffer = bytearray()
+            # Process the complete audio chunk
+            # No need to accumulate, each chunk is a valid audio file now
+            if len(data) > 0:
+                await process_audio(data, websocket)
                 
     except WebSocketDisconnect:
         manager.disconnect(websocket)
