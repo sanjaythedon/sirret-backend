@@ -178,7 +178,7 @@ async def process_audio(audio_data, websocket: WebSocket):
         if temp_file_path and os.path.exists(temp_file_path):
             os.remove(temp_file_path)
 
-@app.websocket("/ws/stream-audio/")
+@app.websocket("/")
 async def websocket_endpoint(websocket: WebSocket):
     await manager.connect(websocket)
     

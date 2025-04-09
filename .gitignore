@@ -1,3 +1,5 @@
 venv/
 .env
 setup_api_gateway.py
+python/
+*.zip
