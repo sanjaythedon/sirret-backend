@@ -2,7 +2,8 @@ import json
 import os
 import base64
 import boto3
-from main import process_audio
+import tempfile
+import openai
 
 def handler(event, context):
     # Log the event for debugging
@@ -11,7 +12,7 @@ def handler(event, context):
     # Get connection ID
     connection_id = event.get('requestContext', {}).get('connectionId')
     if not connection_id:
-        return {'statusCode': 400, 'body': 'ConnectionId not found'}
+        return {'statusCode': 400, 'body': json.dumps({'error': 'ConnectionId not found'})}
     
     # Handle different route types
     route_key = event.get('requestContext', {}).get('routeKey')
@@ -21,65 +22,132 @@ def handler(event, context):
     elif route_key == '$disconnect':
         return handle_disconnect(event)
     else:  # $default or any other route
-        return handle_default_message(event, connection_id)
+        try:
+            return handle_default_message(event, connection_id)
+        except Exception as e:
+            # Log the error but return a 200 to keep the connection alive
+            print(f"Error in handle_default_message: {str(e)}")
+            return {'statusCode': 200, 'body': json.dumps({'error': str(e)})}
 
 def handle_connect(event):
     # Handle new connection
     print("New connection established")
-    return {'statusCode': 200, 'body': 'Connected'}
+    return {'statusCode': 200, 'body': json.dumps({'message': 'Connected'})}
 
 def handle_disconnect(event):
     # Handle disconnection
     print("Connection closed")
-    return {'statusCode': 200, 'body': 'Disconnected'}
+    return {'statusCode': 200, 'body': json.dumps({'message': 'Disconnected'})}
 
 def handle_default_message(event, connection_id):
-    # For binary messages (audio data)
-    print(f"handle_default_message {json.dumps(event)}")
+    # Set up API Gateway Management API client to send messages back
+    domain = event['requestContext']['domainName']
+    stage = event['requestContext']['stage']
+    print(f"Using endpoint URL: https://{domain}/{stage}")
+    
+    # For binary messages (audio data) directly from API Gateway
     if event.get('isBase64Encoded', False):
-        print(f"Processing base64 encoded message for connection {connection_id}")
+        print(f"Processing base64 encoded message from API Gateway for connection {connection_id}")
         body = event.get('body', '')
         # Decode base64 data
         audio_data = base64.b64decode(body)
         print(f"Decoded audio data of size: {len(audio_data)} bytes")
         
-        # Set up API Gateway Management API client to send messages back
-        domain = event['requestContext']['domainName']
-        stage = event['requestContext']['stage']
-        endpoint_url = f"https://{domain}/{stage}"
-        print(f"Using endpoint URL: {endpoint_url}")
-        
         try:
             # Process the audio data
-            # We need to adapt the process_audio function to work in this context
-            print(f"Calling process_audio_lambda for connection {connection_id}")
-            results = process_audio_lambda(audio_data, connection_id, domain, stage)
-            print(f"Audio processing completed with results: {results}")
-            return {'statusCode': 200, 'body': 'Processing audio'}
+            process_audio_lambda(audio_data, connection_id, domain, stage)
+            return {'statusCode': 200, 'body': json.dumps({'message': 'Processing audio'})}
         except Exception as e:
             print(f"Error processing audio: {str(e)}")
             error_message = {'error': f"Error processing audio: {str(e)}"}
-            send_message(connection_id, domain, stage, error_message)
-            return {'statusCode': 500, 'body': str(e)}
+            try:
+                send_message(connection_id, domain, stage, error_message)
+            except Exception as send_error:
+                print(f"Failed to send error message: {str(send_error)}")
+            # Still return 200 to keep connection alive
+            return {'statusCode': 200, 'body': json.dumps({'error': str(e)})}
     else:
-        # For text messages
-        print(f"Processing text message for connection {connection_id}")
+        # For text/JSON messages from our frontend
+        print(f"Processing text/JSON message for connection {connection_id}")
         try:
-            body = json.loads(event.get('body', '{}'))
-            print(f"Received text message: {body}")
-            return {'statusCode': 200, 'body': json.dumps({'message': 'Received text message'})}
-        except Exception as e:
-            print(f"Error parsing message: {str(e)}")
-            return {'statusCode': 400, 'body': json.dumps({'message': 'Invalid message format'})}
+            body = event.get('body', '{}')
+            json_data = json.loads(body)
+            print(f"Received JSON message: {json_data}")
+            
+            # Check for action field (used by API Gateway route selection)
+            # or type field (used in our frontend)
+            message_type = json_data.get('action', json_data.get('type'))
+            
+            # Check if it's our audio data in JSON format
+            if (message_type == 'audio' and 
+                (json_data.get('data') or json_data.get('data') == '')):
+                print(f"Found base64 audio data in JSON message")
+                try:
+                    # Extract base64 data and decode
+                    audio_data = base64.b64decode(json_data.get('data', ''))
+                    print(f"Decoded audio data from JSON: {len(audio_data)} bytes")
+                    
+                    if len(audio_data) < 100:
+                        print(f"Audio data too small, skipping: {len(audio_data)} bytes")
+                        return {'statusCode': 200, 'body': json.dumps({'message': 'Audio data too small'})}
+                    
+                    # Process the audio data
+                    process_audio_lambda(audio_data, connection_id, domain, stage)
+                    return {'statusCode': 200, 'body': json.dumps({'message': 'Processing audio from JSON'})}
+                except Exception as e:
+                    print(f"Error processing audio JSON: {str(e)}")
+                    # Return 200 to keep connection alive
+                    return {'statusCode': 200, 'body': json.dumps({'error': str(e)})}
+                    
+            elif message_type == 'end' or message_type == 'stop':
+                # This is our end-of-stream marker
+                print(f"Received end-of-stream marker")
+                try:
+                    send_message(connection_id, domain, stage, {"status": "completed"})
+                except Exception as send_error:
+                    print(f"Failed to send completion message: {str(send_error)}")
+                return {'statusCode': 200, 'body': json.dumps({'message': 'End of stream received'})}
+            
+            elif message_type == 'test':
+                # Test message for debugging
+                print(f"Received test message: {json_data.get('message', '')}")
+                try:
+                    send_message(connection_id, domain, stage, {"status": "test_received", "message": "Test successful"})
+                except Exception as send_error:
+                    print(f"Failed to send test response: {str(send_error)}")
+                return {'statusCode': 200, 'body': json.dumps({'message': 'Test message received'})}
+                
+            else:
+                # Some other JSON message
+                print(f"Received other JSON message: {json_data}")
+                return {'statusCode': 200, 'body': json.dumps({'message': 'Received JSON message'})}
+                
+        except json.JSONDecodeError as json_error:
+            # Not JSON, maybe binary data without isBase64Encoded flag
+            print(f"Message is not JSON: {str(json_error)}")
+            try:
+                # Try to decode as base64 anyway
+                body = event.get('body', '')
+                if not body:
+                    return {'statusCode': 200, 'body': json.dumps({'message': 'Empty body received'})}
+                    
+                audio_data = base64.b64decode(body)
+                print(f"Managed to decode as base64: {len(audio_data)} bytes")
+                
+                # Process the audio data
+                process_audio_lambda(audio_data, connection_id, domain, stage)
+                return {'statusCode': 200, 'body': json.dumps({'message': 'Processing potential audio data'})}
+            except Exception as base64_error:
+                # Not base64 either
+                print(f"Received non-binary, non-JSON data: {body[:100]}...")
+                # Still return 200 to keep connection alive
+                return {'statusCode': 200, 'body': json.dumps({'message': 'Unrecognized message format'})}
 
 def process_audio_lambda(audio_data, connection_id, domain, stage):
-    """Adapted version of process_audio for Lambda environment"""
+    """Process audio data and extract grocery items"""
     print(f"process_audio_lambda started for connection {connection_id}")
     
     # Create a temporary file to store the audio chunk
-    import tempfile
-    import os
-    
     temp_file_path = None
     try:
         with tempfile.NamedTemporaryFile(delete=False, suffix='.webm') as temp_file:
@@ -91,8 +159,6 @@ def process_audio_lambda(audio_data, connection_id, domain, stage):
         
         # Use OpenAI Whisper to transcribe the audio
         with open(temp_file_path, "rb") as audio_file:
-            import openai
-            
             OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
             if not OPENAI_API_KEY:
                 print("OPENAI_API_KEY environment variable not set")
@@ -118,13 +184,14 @@ def process_audio_lambda(audio_data, connection_id, domain, stage):
         
         if not transcript.strip():
             print("Empty transcript, skipping")
+            send_message(connection_id, domain, stage, {"message": "Empty transcript, no speech detected"})
             return
         
         # For real-time processing, use a more focused prompt for faster inference
         user_prompt = f"Here's the transcript: {transcript}\n\nExtract grocery items with quantities in Tamil or English."
         print(f"Created user prompt: {user_prompt}")
         
-        # System prompt from main.py
+        # System prompt for processing grocery items
         SYSTEM_PROMPT = """
 Extract grocery items from the provided text. The text may contain items in Tamil and English.
 For each item, provide:
@@ -180,6 +247,7 @@ If no quantity is specified, set it to null.
             
             if not grocery_items:
                 print("No grocery items found in transcript")
+                send_message(connection_id, domain, stage, {"message": "No grocery items found in speech"})
                 return
                 
             print(f"Found {len(grocery_items)} grocery items: {grocery_items}")
@@ -206,15 +274,17 @@ If no quantity is specified, set it to null.
 
 def send_message(connection_id, domain_name, stage_name, message):
     """Send a message back to the client through the WebSocket connection"""
-    gateway_api = boto3.client('apigatewaymanagementapi', 
-                              endpoint_url=f'https://{domain_name}/{stage_name}')
-    
     try:
+        gateway_api = boto3.client('apigatewaymanagementapi', 
+                                endpoint_url=f'https://{domain_name}/{stage_name}')
+        
         gateway_api.post_to_connection(
             ConnectionId=connection_id,
             Data=json.dumps(message).encode('utf-8')
         )
+        print(f"Successfully sent message to client: {json.dumps(message)[:100]}...")
         return True
     except Exception as e:
         print(f"Error sending message: {str(e)}")
+        # Don't raise the exception as it might interrupt the flow
         return False 

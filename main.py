@@ -104,7 +104,103 @@ The response should be in this format: {"items": [{"tamil_name": "", "english_na
 If no quantity is specified, set it to null.
 """
 
-async def process_audio(audio_data, websocket: WebSocket):
+# Add a non-async version of process_audio for Lambda usage
+def process_audio(audio_data, websocket=None):
+    """
+    Non-async version of process_audio that can be called directly from Lambda
+    If websocket is None, we're in Lambda mode and need to return the results instead of sending them
+    """
+    # Create a temporary file to store the audio chunk
+    temp_file_path = None
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.webm') as temp_file:
+            temp_file_path = temp_file.name
+            temp_file.write(audio_data)
+        
+        print(f"Processing audio chunk of size {len(audio_data)} bytes")
+        results = []
+        
+        # Use OpenAI Whisper to transcribe the audio
+        with open(temp_file_path, "rb") as audio_file:
+            client = openai.OpenAI(api_key=OPENAI_API_KEY)
+            
+            # Use a faster whisper model for real-time processing
+            try:
+                transcript = client.audio.transcriptions.create(
+                    model="whisper-1",
+                    file=audio_file,
+                    response_format="text"
+                )
+                print(f"Transcribed: {transcript}")
+            except Exception as e:
+                error_message = str(e)
+                print(f"Transcription error: {error_message}")
+                error_data = {"error": f"Error from server: {error_message}"}
+                if websocket:
+                    # In FastAPI mode, send error to websocket
+                    asyncio.run(manager.send_json(websocket, error_data))
+                return error_data
+        
+        if not transcript.strip():
+            print("Empty transcript, skipping")
+            return {"message": "Empty transcript"}
+        
+        # For real-time processing, use a more focused prompt for faster inference
+        user_prompt = f"Here's the transcript: {transcript}\n\nExtract grocery items with quantities in Tamil or English."
+        
+        try:
+            response = client.chat.completions.create(
+                model="gpt-4o",
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": user_prompt}
+                ],
+                response_format={"type": "json_object"},
+                temperature=0.3  # Lower temperature for more consistent, faster responses
+            )
+            
+            # Parse the JSON response
+            result = response.choices[0].message.content
+            grocery_items = json.loads(result).get("items", [])
+            
+            if not grocery_items:
+                print("No grocery items found in transcript")
+                return {"message": "No grocery items found"}
+                
+            print(f"Found {len(grocery_items)} grocery items")
+            
+            if websocket:
+                # In FastAPI mode, send items to websocket
+                for item in grocery_items:
+                    asyncio.run(manager.send_json(websocket, item))
+            else:
+                # In Lambda mode, return all items
+                return grocery_items
+                
+        except Exception as e:
+            error_message = str(e)
+            print(f"GPT processing error: {error_message}")
+            error_data = {"error": f"Error processing text: {error_message}"}
+            if websocket:
+                # In FastAPI mode, send error to websocket
+                asyncio.run(manager.send_json(websocket, error_data))
+            return error_data
+            
+    except Exception as e:
+        error_message = str(e)
+        print(f"Error processing audio: {error_message}")
+        error_data = {"error": f"Error from server: {error_message}"}
+        if websocket:
+            # In FastAPI mode, send error to websocket
+            asyncio.run(manager.send_json(websocket, error_data))
+        return error_data
+    finally:
+        # Clean up the temporary file
+        if temp_file_path and os.path.exists(temp_file_path):
+            os.remove(temp_file_path)
+
+# Rename the async version to avoid confusion
+async def process_audio_async(audio_data, websocket: WebSocket):
     # Create a temporary file to store the audio chunk
     temp_file_path = None
     try:
@@ -196,7 +292,7 @@ async def websocket_endpoint(websocket: WebSocket):
             # Process the complete audio chunk
             # No need to accumulate, each chunk is a valid audio file now
             if len(data) > 0:
-                await process_audio(data, websocket)
+                await process_audio_async(data, websocket)
                 
     except WebSocketDisconnect:
         manager.disconnect(websocket)
